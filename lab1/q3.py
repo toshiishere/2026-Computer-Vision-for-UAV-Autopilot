@@ -30,4 +30,3 @@ grad = cv2.convertScaleAbs(grad_f)
 cv2.imshow('My Image', grad)
 cv2.waitKey(0)
 cv2.destroyAllWindows
-cv2.imwrite("q3.jpg", grad)
