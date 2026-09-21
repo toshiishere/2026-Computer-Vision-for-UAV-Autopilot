@@ -21,10 +21,10 @@ result = gray_bgr.copy()
 # 藍點保留原本顏色
 result[blue_mask] = img[blue_mask]
 
-cv2.imshow("Original", img)
+# cv2.imshow("Original", img)
 cv2.imshow("Result", result)
 
 cv2.waitKey(0)
 cv2.destroyAllWindows()
 
-cv2.imwrite("q1.jpg", result)
+cv2.imwrite("1-1.jpg", result)
