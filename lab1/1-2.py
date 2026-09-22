@@ -1,27 +1,36 @@
 import cv2
 import numpy as np
+
 img = cv2.imread('q1.jpg')
 
 B, G, R = cv2.split(img)
 
-# 找藍點
-blue_mask = (
-    (B > 100) & (B > 1.5 * R) & (B > 1.2 * G)
+contrast = 50
+brightness = 20
+
+mask = (
+    ((B > 1.5 * R) & (B > 1.2 * G)) |
+    ((R > 1.5 * B) & (G > 1.5 * B))
 )
 
-yellow_mask = ((R > 100) & (G > 100) & (R > 1.5 * B) & (G > 1.5 * B))
+# Must use float for arithmetic
+old_img = img.astype(np.float32)
 
-contrast=100
-brightness=40 
+modified_img = (
+    (old_img - 127) * (contrast / 127 + 1)
+    + 127
+    + brightness
+)
 
-mask = blue_mask | yellow_mask
+# Clamp and convert back to uint8
+new_img = np.clip(modified_img, 0, 255).astype(np.uint8)
 
-result = img.copy()
+# Apply brightness/contrast to image
+result = new_img.copy()
 
-result[mask] = cv2.convertScaleAbs(img[mask], alpha=1.5, beta=20)
-# result[mask] = img[mask]
+# 保留 mask 區域的原始顏色
+result[mask] = img[mask]
 
-# cv2.imshow("Original", img)
 cv2.imshow("Result", result)
 
 cv2.waitKey(0)
