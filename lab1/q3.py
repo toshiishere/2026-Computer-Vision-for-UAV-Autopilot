@@ -28,5 +28,6 @@ grad_f = np.sqrt(grad_x_f**2 + grad_y_f**2)
 grad = cv2.convertScaleAbs(grad_f)
 
 cv2.imshow('My Image', grad)
+cv2.imwrite("q3_result.jpg", grad)
 cv2.waitKey(0)
 cv2.destroyAllWindows

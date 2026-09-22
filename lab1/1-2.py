@@ -26,10 +26,10 @@ modified_img = (
 new_img = np.clip(modified_img, 0, 255).astype(np.uint8)
 
 # Apply brightness/contrast to image
-result = new_img.copy()
+result = img.copy()
 
 # 保留 mask 區域的原始顏色
-result[mask] = img[mask]
+result[mask] = new_img[mask]
 
 cv2.imshow("Result", result)
 
