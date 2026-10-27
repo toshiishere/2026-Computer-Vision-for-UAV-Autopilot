@@ -1,6 +1,8 @@
 """PID ArUco following: face a 15 cm marker at TARGET_DISTANCE centimeters.
 
 1: take off and track; 2: land; 3/Space: hover; T: resume; Q/Esc: exit.
+W/S: forward/back; A/D: left/right; Z/X: up/down; C/V: yaw.
+Movement keys override PID for 0.5 s after the last key event.
 Gains and limits below are starting values and require flight tuning.
 """
 from math import atan2, degrees, isfinite, sqrt
@@ -9,6 +11,7 @@ from pathlib import Path
 from time import monotonic
 
 from pyimagesearch.pid import PID
+from keyboard_djitellopy import MOVEMENT, normalize_key
 
 MARKER_LENGTH = 15.0  # Physical printed marker side length, centimeters.
 TARGET_DISTANCE = 100.0  # Camera Z distance, centimeters.
@@ -18,6 +21,7 @@ DEADBAND = 3.0  # Position tolerance in centimeters.
 YAW_DEADBAND = 3.0  # Heading tolerance in degrees.
 MAX_YAW_SPEED = 50  # Yaw RC limit in degrees/s.
 TURN_FIRST_ANGLE = 15.0  # Face the marker before moving forward/back.
+MANUAL_TIMEOUT = 0.5  # Seconds after the last movement key event.
 STOP = (0, 0, 0, 0)
 
 
@@ -35,10 +39,9 @@ class RCLogFilter(logging.Filter):
 
 class MarkerController:
     def __init__(self):
-        # No integral term: avoids windup while movement is speed limited.
         self.axes = [PID(kP=1.0, kI=0.1, kD=0.1),
                      PID(kP=1.0, kI=0.07, kD=0.1),
-                     PID(kP=2.0, kI=0.2, kD=0.12)]
+                     PID(kP=2.0, kI=0.2, kD=0.1)]
         self.reset()
 
     def reset(self):
@@ -100,6 +103,8 @@ def main():
     previous_frame = None
     last_frame_time = monotonic()
     command = STOP
+    manual_command = STOP
+    manual_until = 0.0
     window = f'Tello PID - {TARGET_DISTANCE:g} cm'
     drone = Tello()
     rc_log_filter = RCLogFilter()
@@ -112,12 +117,49 @@ def main():
         frame_read = drone.get_frame_read()
         cv2.namedWindow(window)
         while True:
+            key = normalize_key(cv2.waitKey(30))
+            if key in (ord('q'), ord('Q'), 27):
+                break
+            if key in MOVEMENT:
+                if drone.is_flying:
+                    manual_command = MOVEMENT[key]
+                    manual_until = monotonic() + MANUAL_TIMEOUT
+                    controller.reset()
+            elif key == ord('1'):
+                if not drone.is_flying:
+                    drone.takeoff()
+                manual_until = 0.0
+                tracking = True
+                command = STOP
+                controller.reset()
+            elif key == ord('2'):
+                manual_until = 0.0
+                tracking = False
+                command = STOP
+                if drone.is_flying:
+                    drone.send_rc_control(*STOP)
+                    drone.land()
+                controller.reset()
+            elif key in (ord('3'), ord(' ')):
+                manual_until = 0.0
+                tracking = False
+                command = STOP
+                if drone.is_flying:
+                    drone.send_rc_control(*STOP)
+                controller.reset()
+            elif key in (ord('t'), ord('T')):
+                manual_until = 0.0
+                command = STOP
+                tracking = drone.is_flying
+                controller.reset()
+            manual_active = drone.is_flying and monotonic() < manual_until
             source = frame_read.frame
             fresh = source is not None and source.size and source is not previous_frame
             if fresh:
                 previous_frame = source
                 last_frame_time = monotonic()
-                frame = source.copy()
+                # DJITelloPy/PyAV supplies RGB; OpenCV uses BGR.
+                frame = cv2.cvtColor(source, cv2.COLOR_RGB2BGR)
                 command = STOP
                 position = None
                 if detector is not None:
@@ -140,15 +182,19 @@ def main():
                         cv2.drawFrameAxes(frame, intrinsic, distortion,
                                           rvecs[0], tvecs[0], MARKER_LENGTH / 2)
                         break
-                if tracking and drone.is_flying and position is not None:
+                if tracking and drone.is_flying and position is not None and not manual_active:
                     command = controller.velocity(position)
                 else:
                     controller.reset()
-                status = 'TRACKING' if tracking and drone.is_flying else 'PAUSED'
+                if manual_active:
+                    command = manual_command
+                status = ('MANUAL' if manual_active else
+                          'TRACKING' if tracking and drone.is_flying else 'PAUSED')
                 lines = [f'{status} | ID: {target_id} | target Z: {TARGET_DISTANCE:.0f} cm',
-                         '1: takeoff/track | 2: land | 3/Space: hover | T: track | Q: quit']
+                         '1: takeoff/track | 2: land | 3/Space: hover | T: track | Q: quit',
+                         'Manual priority: W/S A/D Z/X C/V (0.5 s timeout)']
                 if position is None:
-                    lines.append('Target missing - hover')
+                    lines.append('Target missing - manual control' if manual_active else 'Target missing - hover')
                 else:
                     x, y, z = position
                     distance = sqrt(x*x + y*y + z*z)
@@ -163,37 +209,17 @@ def main():
                     cv2.putText(frame, line, point, cv2.FONT_HERSHEY_SIMPLEX,
                                 0.5, (0, 255, 0), 1, cv2.LINE_AA)
                 cv2.imshow(window, frame)
-            if monotonic() - last_frame_time > 0.3:
+            if manual_active:
+                command = manual_command
+            elif not fresh or not tracking:
+                # Never reuse a manual command when its override expires.
+                command = STOP
+            if not manual_active and monotonic() - last_frame_time > 0.3:
                 command = STOP
                 controller.reset()
             if drone.is_flying:
                 # Continue RC updates while hovering; filter their routine logs.
                 drone.send_rc_control(*command)
-            key = cv2.waitKey(30) & 0xFF
-            if key in (ord('q'), ord('Q'), 27):
-                break
-            if key == ord('1'):
-                if not drone.is_flying:
-                    drone.takeoff()
-                tracking = True
-                command = STOP
-                controller.reset()
-            elif key == ord('2'):
-                tracking = False
-                command = STOP
-                if drone.is_flying:
-                    drone.send_rc_control(*STOP)
-                    drone.land()
-                controller.reset()
-            elif key in (ord('3'), ord(' ')):
-                tracking = False
-                command = STOP
-                if drone.is_flying:
-                    drone.send_rc_control(*STOP)
-                controller.reset()
-            elif key in (ord('t'), ord('T')):
-                tracking = drone.is_flying
-                controller.reset()
             if cv2.getWindowProperty(window, cv2.WND_PROP_VISIBLE) < 1:
                 break
     except KeyboardInterrupt:
