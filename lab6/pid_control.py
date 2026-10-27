@@ -13,10 +13,10 @@ from pyimagesearch.pid import PID
 MARKER_LENGTH = 15.0  # Physical printed marker side length, centimeters.
 TARGET_DISTANCE = 100.0  # Camera Z distance, centimeters.
 TARGET_ID = 1  # None locks onto the first visible ID until restart.
-MAX_SPEED = 40  # RC velocity limit in cm/s.
+MAX_SPEED = 50  # RC velocity limit in cm/s.
 DEADBAND = 3.0  # Position tolerance in centimeters.
 YAW_DEADBAND = 3.0  # Heading tolerance in degrees.
-MAX_YAW_SPEED = 30  # Yaw RC limit in degrees/s.
+MAX_YAW_SPEED = 50  # Yaw RC limit in degrees/s.
 TURN_FIRST_ANGLE = 15.0  # Face the marker before moving forward/back.
 STOP = (0, 0, 0, 0)
 
@@ -36,9 +36,9 @@ class RCLogFilter(logging.Filter):
 class MarkerController:
     def __init__(self):
         # No integral term: avoids windup while movement is speed limited.
-        self.axes = [PID(kP=0.4, kI=0, kD=0.05),
-                     PID(kP=0.4, kI=0, kD=0.05),
-                     PID(kP=0.8, kI=0, kD=0.08)]
+        self.axes = [PID(kP=1.0, kI=0.1, kD=0.1),
+                     PID(kP=1.0, kI=0.07, kD=0.1),
+                     PID(kP=2.0, kI=0.2, kD=0.12)]
         self.reset()
 
     def reset(self):
