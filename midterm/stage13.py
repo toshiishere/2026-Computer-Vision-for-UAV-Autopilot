@@ -52,7 +52,7 @@ class RCLogFilter(logging.Filter):
 class MarkerController:
     def __init__(self):
         self.axes = [PID(kP=1.0, kI=0.1, kD=0.1),
-                     PID(kP=1.0, kI=0.07, kD=0.1),
+                     PID(kP=1.0, kI=0.1, kD=0.1),
                      PID(kP=1, kI=0.1, kD=0.1),
                      PID(kP=1.0, kI=0, kD=0.1)]
         self.reset()
@@ -88,14 +88,14 @@ class MarkerController:
         return (0, forward, vertical, yaw)
 
 
-    def velocity_new(self, position, target_x, stage = 2, target_y = 0):
+    def velocity_new(self, position, target_x = 0, stage = 2, target_y = 0, target_z = TARGET_DISTANCE):
         x, y, z = map(float, position)
         mult = 0 if stage == 1 else 1
         if not all(isfinite(value) for value in (x, y, z)) or z <= 0:
             self.reset()
             return STOP
         heading = degrees(atan2(x, z))
-        errors = (x-target_x, z - TARGET_DISTANCE, (y - target_y) * mult, heading)
+        errors = (x-target_x, z - target_z, (target_y - y) * mult, heading)
         if not self.ready:
             for pid, error in zip(self.axes, errors):
                 pid.initialize()
@@ -258,17 +258,19 @@ def main():
                         Y = position[1]
                         Z = position[2]
 
-                        print(f"Z-TARGET_DISTANCE_3 {Z-TARGET_DISTANCE_3}")
-                        if Z-TARGET_DISTANCE_3 > 50:
-                            command = controller.velocity_new(position=position, target_x=0, stage=3, target_y=0)
+                        print(f"Z-TARGET_DISTANCE {Z-TARGET_DISTANCE_3}")
+                        if Z-TARGET_DISTANCE_3 > 25:
+                            command = controller.velocity_new(position=position, target_x=0, stage=3, target_y=0, target_z=TARGET_DISTANCE_3)
                         else:
-                            command = controller.velocity_new(position=position, target_x=0, stage=3, target_y=-55)
+                            print("Goes DOWNNN")
+                            command = controller.velocity_new(position=position, target_x=0, stage=3, target_y=-60, target_z=TARGET_DISTANCE_3)
                             stage3_flag = True
 
                     if stage3_flag == True:
                         stage3_flag = False
-                        print("drone.move_forward(150)")
-                        drone.move_forward(150)
+                        print("drone.move_forward(300)")
+                        drone.move_down(60)
+                        drone.move_forward(300)
 
                 else:
                     controller.reset()
