@@ -66,6 +66,7 @@ class MarkerController:
         # velocity_new() axis order: lateral X, depth Z, vertical Y, heading.
         self.axes = [PID(kP=1.0, kI=0.1, kD=0.1),
                      PID(kP=1.0, kI=0.1, kD=0.1),
+                     PID(kP=1.0, kI=0.1, kD=0.1),
                      PID(kP=1, kI=0.1, kD=0.1),
                      PID(kP=1.0, kI=0, kD=0.1)]
         self.reset()
@@ -130,6 +131,7 @@ class MarkerController:
             self.reset()
             return STOP
         heading = degrees(atan2(x, z))
+        errors = (x-target_x, z - target_z, (target_y - y) * mult, heading)
         errors = (x-target_x, z - target_z, (target_y - y) * mult, heading)
         if not self.ready:
             for pid, error in zip(self.axes, errors):
@@ -322,7 +324,12 @@ def main():
                         print(f"Z-TARGET_DISTANCE {Z-TARGET_DISTANCE_3}")
                         if Z-TARGET_DISTANCE_3 > 25:
                             command = controller.velocity_new(position=position, target_x=0, stage=3, target_y=0, target_z=TARGET_DISTANCE_3)
+                        print(f"Z-TARGET_DISTANCE {Z-TARGET_DISTANCE_3}")
+                        if Z-TARGET_DISTANCE_3 > 25:
+                            command = controller.velocity_new(position=position, target_x=0, stage=3, target_y=0, target_z=TARGET_DISTANCE_3)
                         else:
+                            print("Goes DOWNNN")
+                            command = controller.velocity_new(position=position, target_x=0, stage=3, target_y=-60, target_z=TARGET_DISTANCE_3)
                             print("Goes DOWNNN")
                             command = controller.velocity_new(position=position, target_x=0, stage=3, target_y=-60, target_z=TARGET_DISTANCE_3)
                             stage3_flag = True
@@ -332,6 +339,9 @@ def main():
                         # The flag resets here, but marker 3 can set it again next frame.
                         # The RC command above is sent only later, after this call returns.
                         stage3_flag = False
+                        print("drone.move_forward(300)")
+                        drone.move_down(60)
+                        drone.move_forward(300)
                         print("drone.move_forward(300)")
                         drone.move_down(60)
                         drone.move_forward(300)
