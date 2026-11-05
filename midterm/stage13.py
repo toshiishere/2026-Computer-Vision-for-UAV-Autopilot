@@ -1,4 +1,14 @@
-"""PID ArUco following: face a 15 cm marker at TARGET_DISTANCE centimeters.
+"""Practice course sections 1 and 3, skipping section 2's marker-0 following.
+
+Intended route: marker 1 -> pass right -> marker 2 -> pass left -> marker 3.
+The current code chooses a branch from the visible marker ID each frame;
+it does not store a course phase or enforce this marker order.
+
+Marker 1: if Z > 125 cm, center and approach; otherwise target X = -50 cm.
+Marker 2: if Z > 125 cm, center and approach; otherwise target X = +50 cm.
+Marker 3: if Z > 100 cm, target X/Y = 0; otherwise target Y = -55 cm
+and immediately issue a blocking move_forward(150).
+All velocity_new() branches still use a Z target of 120 cm.
 
 1: take off and track; 2: land; 3/Space: hover; T: resume; Q/Esc: exit.
 W/S: forward/back; A/D: left/right; Z/X: up/down; C/V: yaw.
@@ -14,15 +24,15 @@ from pyimagesearch.pid import PID
 
 MARKER_LENGTH = 15.0  # Physical printed marker side length, centimeters.
 TARGET_DISTANCE = 120.0  # Camera Z distance, centimeters.
-TARGET_DISTANCE_3 = 50.0
-TARGET_ID = 1  # None locks onto the first visible ID until restart.
+TARGET_DISTANCE_3 = 50.0  # Used in the marker-3 branch test, not its PID Z target.
+TARGET_ID = 1  # Display/initial target value; marker filtering below is disabled.
 MAX_SPEED = 25  # RC velocity limit in cm/s.
 DEADBAND = 3.0  # Position tolerance in centimeters.
 YAW_DEADBAND = 3.0  # Heading tolerance in degrees.
 MAX_YAW_SPEED = 20  # Yaw RC limit in degrees/s.
 TURN_FIRST_ANGLE = 15.0  # Face the marker before moving forward/back.
 MANUAL_TIMEOUT = 0.5  # Seconds after the last movement key event.
-STOP = (0, 0, 0, 0)
+STOP = (0, 0, 0, 0)  # RC order: left/right, forward/back, up/down, yaw.
 
 MOVEMENT = {
     ord('w'): (0, 40, 0, 0), ord('s'): (0, -40, 0, 0),
@@ -50,19 +60,37 @@ class RCLogFilter(logging.Filter):
 
 
 class MarkerController:
+    """Convert camera-relative marker errors into bounded RC commands."""
+
     def __init__(self):
+        # velocity_new() axis order: lateral X, depth Z, vertical Y, heading.
         self.axes = [PID(kP=1.0, kI=0.1, kD=0.1),
-                     PID(kP=1.0, kI=0.07, kD=0.1),
+                     PID(kP=1.0, kI=0.1, kD=0.1),
+                     PID(kP=1.0, kI=0.1, kD=0.1),
                      PID(kP=1, kI=0.1, kD=0.1),
                      PID(kP=1.0, kI=0, kD=0.1)]
         self.reset()
 
     def reset(self):
+        # Clear accumulated integral and derivative history after interruptions.
         for pid in self.axes:
             pid.initialize()
         self.ready = False
 
+    def set_follow(self):
+        # Clear accumulated integral and derivative history after interruptions.
+        self.axes = [PID(kP=1.0, kI=0.1, kD=0.1),
+                    PID(kP=1.0, kI=0.1, kD=0.1),
+                    PID(kP=1, kI=0.07, kD=0.1),
+                    PID(kP=2.0, kI=0.1, kD=0.1)]
+    def unset_set_follow(self):
+        # Clear accumulated integral and derivative history after interruptions.
+        self.axes = [PID(kP=1.0, kI=0.1, kD=0.1),
+                        PID(kP=1.0, kI=0.07, kD=0.1),
+                        PID(kP=1, kI=0.1, kD=0.1),
+                        PID(kP=1.0, kI=0, kD=0.1)]
     def velocity(self, position):
+        """Older forward/vertical/yaw follower; main() uses velocity_new()."""
         x, y, z = map(float, position)
         if not all(isfinite(value) for value in (x, y, z)) or z <= 0:
             self.reset()
@@ -89,13 +117,22 @@ class MarkerController:
 
 
     def velocity_new(self, position, target_x, stage = 2, target_y = 0):
+        """Strafe toward target_x while regulating Z to TARGET_DISTANCE.
+
+        stage=1 disables vertical correction; any other stage enables it.
+        This argument is a controller mode, not a stored mission phase.
+        Camera X points right, Y points down, and Z points forward (cm).
+        The current vertical error is +(Y-target_y), as implemented below.
+        Heading PID is calculated, but the returned yaw command is always zero.
+        """
         x, y, z = map(float, position)
         mult = 0 if stage == 1 else 1
         if not all(isfinite(value) for value in (x, y, z)) or z <= 0:
             self.reset()
             return STOP
         heading = degrees(atan2(x, z))
-        errors = (x-target_x, z - TARGET_DISTANCE, (y - target_y) * mult, heading)
+        errors = (x-target_x, z - target_z, (target_y - y) * mult, heading)
+        errors = (x-target_x, z - target_z, (target_y - y) * mult, heading)
         if not self.ready:
             for pid, error in zip(self.axes, errors):
                 pid.initialize()
@@ -112,7 +149,7 @@ class MarkerController:
 
         # if abs(heading) > TURN_FIRST_ANGLE:
         #     forward = 0
-        return (parallel, forward, vertical, 0)
+        return (parallel, forward, vertical, 0)  # Keep the course heading fixed.
 
 
 
@@ -120,7 +157,8 @@ def main():
     import cv2
     from djitellopy import Tello
 
-    stage3_flag = False
+    stage3_flag = False  # Triggers the forward move later in the same frame.
+    # Load camera calibration so ArUco pose estimates are in centimeters.
     calibration = Path(__file__).resolve().with_name('camera.xml')
     fs = cv2.FileStorage(str(calibration), cv2.FILE_STORAGE_READ)
     try:
@@ -133,6 +171,7 @@ def main():
     finally:
         fs.release()
 
+    # Support both newer and older OpenCV ArUco detector APIs.
     aruco = cv2.aruco
     dictionary = aruco.getPredefinedDictionary(aruco.DICT_4X4_250)
     parameters = (aruco.DetectorParameters() if hasattr(aruco, 'DetectorParameters')
@@ -159,6 +198,7 @@ def main():
         frame_read = drone.get_frame_read()
         cv2.namedWindow(window)
         while True:
+            # Keyboard input: manual commands temporarily override automatic tracking.
             key = normalize_key(cv2.waitKey(30))
             if key in (ord('q'), ord('Q'), 27):
                 break
@@ -196,6 +236,7 @@ def main():
                 controller.reset()
             manual_active = drone.is_flying and monotonic() < manual_until
             source = frame_read.frame
+            # Only run vision/PID when the video reader supplies a new frame object.
             fresh = source is not None and source.size and source is not previous_frame
             if fresh:
                 previous_frame = source
@@ -213,6 +254,9 @@ def main():
                     if target_id is None:
                         target_id = int(ids[0, 0])
                     for index, marker_id in enumerate(ids.flatten()):
+                        # Filtering is disabled: every detected marker is processed.
+                        # position ends up belonging to the last valid marker, while
+                        # the control branches below use ids[0, 0] (the first ID).
                         # if int(marker_id) != target_id:
                         #     continue
                         rvecs, tvecs, _ = aruco.estimatePoseSingleMarkers( # tvecs: [X, Y, Z]. rvecs: Rodrigues rotation vector
@@ -225,6 +269,8 @@ def main():
                                           rvecs[0], tvecs[0], MARKER_LENGTH / 2)
                         # break
                 if tracking and drone.is_flying and position is not None and not manual_active:
+                    # SECTION 1, first obstacle: marker 1.
+                    # The test is one-sided Z error, not full X/Y/Z alignment.
                     if int(ids[0, 0]) == 1:
                         print("ids = 1")
                         X = position[0]
@@ -234,11 +280,14 @@ def main():
 
                         print(f"Z-TARGET_DISTANCE = {Z-TARGET_DISTANCE}")
                         if Z-TARGET_DISTANCE > 5:
+                            # Z > 125 cm: approach at centered X; hold vertical RC at 0.
                             command = controller.velocity_new(position, 0, 1)
                         else:
+                            # Target marker X=-50: strafe right so it appears to the left.
                             command = controller.velocity_new(position, -50, 1)
                             
-                    if int(ids[0, 0]) == 2:
+                    # SECTION 1, second obstacle: marker 2.
+                    elif int(ids[0, 0]) == 2:
                         print("ids = 2")
                         X = position[0]
                         Y = position[1]
@@ -248,32 +297,60 @@ def main():
                         # command = controller.velocity(position)
                         print(f"Z-TARGET_DISTANCE = {Z-TARGET_DISTANCE}")
                         if Z-TARGET_DISTANCE > 5:
+                            # Z > 125 cm: approach centered, without vertical correction.
                             command = controller.velocity_new(position, 0, 1)
                         else:
+                            # Target marker X=+50: strafe left so it appears to the right.
                             command = controller.velocity_new(position, 50, 1)
 
-                    if int(ids[0, 0]) == 3:
+                    # SECTION 2
+                    elif int(ids[0, 0]) == 0:
+                        X = position[0]
+                        Y = position[1]
+                        Z = position[2]
+                        print("ids = 0")
+                        controller.set_follow()
+                        print(f"Z-TARGET_DISTANCE = {Z-TARGET_DISTANCE}")
+                        command = controller.velocity_new(position, 0, 1)
+
+                    # SECTION 3: marker 3 directly, with no marker-0 following stage.
+                    elif int(ids[0, 0]) == 3:
+                        controller.unset_set_follow()
                         print("id = 3")
                         X = position[0]
                         Y = position[1]
                         Z = position[2]
 
-                        print(f"Z-TARGET_DISTANCE_3 {Z-TARGET_DISTANCE_3}")
-                        if Z-TARGET_DISTANCE_3 > 50:
-                            command = controller.velocity_new(position=position, target_x=0, stage=3, target_y=0)
+                        print(f"Z-TARGET_DISTANCE {Z-TARGET_DISTANCE_3}")
+                        if Z-TARGET_DISTANCE_3 > 25:
+                            command = controller.velocity_new(position=position, target_x=0, stage=3, target_y=0, target_z=TARGET_DISTANCE_3)
+                        print(f"Z-TARGET_DISTANCE {Z-TARGET_DISTANCE_3}")
+                        if Z-TARGET_DISTANCE_3 > 25:
+                            command = controller.velocity_new(position=position, target_x=0, stage=3, target_y=0, target_z=TARGET_DISTANCE_3)
                         else:
-                            command = controller.velocity_new(position=position, target_x=0, stage=3, target_y=-55)
+                            print("Goes DOWNNN")
+                            command = controller.velocity_new(position=position, target_x=0, stage=3, target_y=-60, target_z=TARGET_DISTANCE_3)
+                            print("Goes DOWNNN")
+                            command = controller.velocity_new(position=position, target_x=0, stage=3, target_y=-60, target_z=TARGET_DISTANCE_3)
                             stage3_flag = True
 
                     if stage3_flag == True:
+                        # Blocking SDK command: fly forward 150 cm before the loop resumes.
+                        # The flag resets here, but marker 3 can set it again next frame.
+                        # The RC command above is sent only later, after this call returns.
                         stage3_flag = False
-                        print("drone.move_forward(150)")
-                        drone.move_forward(150)
+                        print("drone.move_forward(300)")
+                        drone.move_down(60)
+                        drone.move_forward(300)
+                        print("drone.move_forward(300)")
+                        drone.move_down(60)
+                        drone.move_forward(300)
 
                 else:
                     controller.reset()
                 if manual_active:
                     command = manual_command
+                # Overlay the active control mode, marker position, and RC command.
                 status = ('MANUAL' if manual_active else
                           'TRACKING' if tracking and drone.is_flying else 'PAUSED')
                 lines = [f'{status} | ID: {target_id} | target Z: {TARGET_DISTANCE:.0f} cm',
@@ -300,6 +377,7 @@ def main():
             elif not fresh or not tracking:
                 # Never reuse a manual command when its override expires.
                 command = STOP
+            # Stop automatic movement if video has not updated for 0.3 seconds.
             if not manual_active and monotonic() - last_frame_time > 0.3:
                 command = STOP
                 controller.reset()
@@ -311,6 +389,7 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        # On quit/error, stop and land, then release video/window/logging resources.
         try:
             if drone.is_flying:
                 try:

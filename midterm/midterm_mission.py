@@ -1,6 +1,7 @@
-"""Restartable, nonblocking Lab 7 / midterm sections. All distances are cm."""
+"""Restartable, nonblocking midterm sections. All distances are cm."""
 from dataclasses import dataclass, field
 from math import atan2, degrees, isfinite
+from mission_pid import AlignmentPID, FollowPID
 
 STOP = (0, 0, 0, 0)
 
@@ -22,7 +23,6 @@ class Settings:
     over_board_height: float = 170.0
     table_pass_distance: float = 150.0
     right_turn_degrees: float = 90.0
-    lab7_left_distance: float = 100.0
     right_clearance_distance: float = 75.0
     travel_speed: int = 20
     tracking_speed: int = 25
@@ -36,8 +36,6 @@ class Settings:
     follow_timeout: float = 120.0
     frame_timeout: float = 0.3
     manual_timeout: float = 0.25
-    blue_min_area_ratio: float = 0.025
-    blue_min_width_ratio: float = 0.4
 
     def validate(self):
         for name, value in vars(self).items():
@@ -54,12 +52,9 @@ class Settings:
             raise ValueError('under_table_height must be below over_board_height')
         if self.right_turn_degrees >= 180:
             raise ValueError('right_turn_degrees must be below 180')
-        for distance in (self.table_pass_distance, self.lab7_left_distance, self.right_clearance_distance):
+        for distance in (self.table_pass_distance, self.right_clearance_distance):
             if distance / self.travel_speed >= self.phase_timeout:
                 raise ValueError('phase_timeout must exceed every timed travel duration')
-        for name in ('blue_min_area_ratio', 'blue_min_width_ratio'):
-            if getattr(self, name) > 1:
-                raise ValueError(f'{name} must be <= 1')
 
 
 @dataclass
@@ -67,7 +62,6 @@ class Observation:
     markers: dict = field(default_factory=dict)  # ID -> (x, corrected y, z), cm
     height: float = 0.0
     yaw: float = 0.0
-    blue_line: bool = False
 
 
 class Mission:
@@ -76,18 +70,24 @@ class Mission:
     NAMES = ('obstacles 1/2', 'follow marker 0', 'under table / turn / rise',
              'left over board', 'marker 5 / land')
 
-    def __init__(self, settings=None, lab7=False):
+    def __init__(self, settings=None):
         self.cfg = settings or Settings()
         self.cfg.validate()
-        self.lab7 = lab7
         self.section = 1
+        self.alignment_pid = AlignmentPID()
+        self.follow_pid = FollowPID()
         self.restart()
+
+    def _reset_pid(self):
+        self.alignment_pid.reset()
+        self.follow_pid.reset()
 
     def restart(self, section=None):
         if section is not None:
             if section not in range(1, 6):
                 raise ValueError('Section must be 1..5')
             self.section = section
+        self._reset_pid()
         self.phase = ('approach1', 'follow0', 'approach3', 'left', 'align5')[self.section - 1]
         self.elapsed = 0.0
         self.stable = 0.0
@@ -99,6 +99,7 @@ class Mission:
         self.note = 'Ready; T to start'
 
     def pause(self, reason='Paused; T to resume, R to restart section'):
+        self._reset_pid()
         self.running = False
         self.last_time = None
         self.stable = 0.0
@@ -106,6 +107,7 @@ class Mission:
 
     def resume(self):
         if not self.completed and not self.land_requested:
+            self._reset_pid()
             self.running = True
             self.last_time = None
             self.note = 'Running'
@@ -114,11 +116,12 @@ class Mission:
         self.restart(min(5, self.section + 1))
 
     def _phase(self, name):
+        self._reset_pid()
         self.phase = name
         self.elapsed = self.stable = 0.0
 
     def _advance(self):
-        if self.lab7 or self.section == 5:
+        if self.section == 5:
             self.completed = True
             self.pause('Complete')
         else:
@@ -139,14 +142,16 @@ class Mission:
         """Strafe to center; preserve the course heading rather than chasing IDs."""
         p = self._position(obs, marker_id)
         if p is None:
+            self.alignment_pid.reset()
             self.note = f'Marker {marker_id} missing: hover'
             return STOP, False
         self.note = f'Target marker {marker_id}'
         x, y, z = p
         errors = (x, z - distance, -y if vertical else 0)
         limit = self.cfg.tracking_speed
-        rc = tuple(0 if abs(e) <= self.cfg.position_tolerance else
-                   int(round(max(-limit, min(limit, e * 0.5)))) for e in errors)
+        rc = self.alignment_pid.velocity(
+            errors, (self.cfg.position_tolerance,) * 3, (limit,) * 3,
+            enabled=(True, True, vertical))
         return (*rc, 0), all(abs(e) <= self.cfg.position_tolerance for e in errors)
 
     def _height(self, obs, target):
@@ -191,25 +196,29 @@ class Mission:
             if self._held(aligned, dt):
                 self._phase('left')
             return rc
-        if self.lab7:
-            if self.elapsed >= self.cfg.lab7_left_distance / self.cfg.travel_speed:
-                self._advance()
-                return STOP
-        elif self._held(self._position(obs, 0) is not None, dt):
+        if self._held(self._position(obs, 0) is not None, dt):
             self._advance()
             return STOP
         return (-self.cfg.travel_speed, 0, 0, 0)
 
     def section2(self, obs, dt):
         """第二段: follow marker 0 until ID 2 is absent and ID 3 is visible."""
-        rc, _ = self._track(obs, 0, self.cfg.follow_distance)
         position = self._position(obs, 0)
-        if position is not None:
+        if position is None:
+            self.follow_pid.reset()
+            self.note = 'Marker 0 missing: hover'
+            rc = STOP
+        else:
+            self.note = 'Target marker 0'
             heading = degrees(atan2(position[0], position[2]))
-            yaw = 0 if abs(heading) <= self.cfg.yaw_tolerance else int(round(
-                max(-self.cfg.yaw_speed, min(self.cfg.yaw_speed, heading * 1.5))))
+            forward, vertical, yaw = self.follow_pid.velocity(
+                (position[2] - self.cfg.follow_distance, -position[1], heading),
+                (self.cfg.position_tolerance, self.cfg.position_tolerance,
+                 self.cfg.yaw_tolerance),
+                (self.cfg.tracking_speed, self.cfg.tracking_speed, self.cfg.yaw_speed),
+                enabled=(abs(heading) <= 15, True, True))
             # Turn with the guide around the chair; face them before advancing.
-            rc = (0, rc[1] if abs(heading) <= 15 else 0, rc[2], yaw)
+            rc = (0, forward, vertical, yaw)
         if self._held(2 not in obs.markers and self._position(obs, 3) is not None, dt):
             self._advance()
             return STOP
