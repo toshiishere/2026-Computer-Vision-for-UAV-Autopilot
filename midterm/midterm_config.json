@@ -11,7 +11,6 @@
   "over_board_height": 170.0,
   "table_pass_distance": 150.0,
   "right_turn_degrees": 90.0,
-  "lab7_left_distance": 100.0,
   "right_clearance_distance": 75.0,
   "travel_speed": 20,
   "tracking_speed": 25,
@@ -24,7 +23,5 @@
   "phase_timeout": 25.0,
   "follow_timeout": 120.0,
   "frame_timeout": 0.3,
-  "manual_timeout": 0.25,
-  "blue_min_area_ratio": 0.025,
-  "blue_min_width_ratio": 0.4
+  "manual_timeout": 0.25
 }

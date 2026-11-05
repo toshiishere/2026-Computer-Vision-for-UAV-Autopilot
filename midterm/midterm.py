@@ -1,4 +1,4 @@
-"""Midterm / Lab 7 flight runner. Focus the video window for keyboard control.
+"""Midterm flight runner. Focus the video window for keyboard control.
 
 1 takeoff (paused); 2 land; 3/Space pause; T run/resume; R restart section.
 4/5/6/7/8 select sections 1/2/3/4/5 (paused); N next section (paused).
@@ -71,21 +71,6 @@ class Vision:
                                   rotations[0], positions[0], self.cfg.marker_length / 2)
         return markers
 
-    def blue_line(self, frame):
-        import numpy as np
-        cv2 = self.cv2
-        roi = frame[int(frame.shape[0] * 0.55):]
-        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-        mask = cv2.inRange(hsv, np.array((90, 100, 60)), np.array((135, 255, 255)))
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        for contour in contours:
-            _, _, width, _ = cv2.boundingRect(contour)
-            if (cv2.contourArea(contour) >= roi.shape[0] * roi.shape[1] * self.cfg.blue_min_area_ratio
-                    and width >= roi.shape[1] * self.cfg.blue_min_width_ratio):
-                return True
-        return False
-
-
 class KeyboardControl:
     """Keyboard policy is independent of vision and testable without a drone."""
     def __init__(self, mission):
@@ -144,12 +129,12 @@ class KeyboardControl:
         return self.manual_command if now < self.manual_until else STOP
 
 
-def run(cfg, lab7=False, section=1):
+def run(cfg, section=1):
     import cv2
     from djitellopy import Tello
 
     vision = Vision(cv2, cfg)
-    mission = Mission(cfg, lab7)
+    mission = Mission(cfg)
     mission.restart(section)
     controls = KeyboardControl(mission)
     drone = Tello()
@@ -179,8 +164,7 @@ def run(cfg, lab7=False, section=1):
                 last_frame_time = now
                 frame = cv2.cvtColor(source, cv2.COLOR_RGB2BGR)
                 markers = vision.read(frame)
-                blue = vision.blue_line(frame)
-                observation = Observation(markers, drone.get_height(), drone.get_yaw(), blue)
+                observation = Observation(markers, drone.get_height(), drone.get_yaw())
                 command = mission.tick(observation, now) if drone.is_flying else STOP
                 if mission.land_requested:
                     drone.send_rc_control(*STOP)
@@ -190,11 +174,11 @@ def run(cfg, lab7=False, section=1):
                     mission.completed = True
                     mission.note = 'Complete: landed at marker 5'
                 status = 'RUNNING' if mission.running else 'PAUSED'
-                lines = [f'{"LAB7" if lab7 else "MIDTERM"} {status} | section {mission.section}: {mission.NAMES[mission.section-1]}',
+                lines = [f'MIDTERM {status} | section {mission.section}: {mission.NAMES[mission.section-1]}',
                          f'Phase: {mission.phase} ({mission.elapsed:.1f}s) | {mission.note}',
                          '1 takeoff | 2 land | Space pause | T resume | R restart | Q quit',
                          '4..8 sections 1..5 | N next | W/S A/D Z/X C/V manual takeover',
-                         f'Visible IDs: {sorted(markers)} | blue line: {blue} | height: {observation.height} cm',
+                         f'Visible IDs: {sorted(markers)} | height: {observation.height} cm',
                          f'ArUco Y calibration: corrected Y = raw Y - {cfg.aruco_y_offset_cm:+.1f} cm']
                 for marker_id, p in sorted(markers.items()):
                     raw_y = vision.raw_markers[marker_id][1]
@@ -235,12 +219,9 @@ def run(cfg, lab7=False, section=1):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', help='JSON overrides for Settings (see midterm_config.json)')
-    parser.add_argument('--lab7', action='store_true', help='Only marker 1 right / marker 2 left exercise')
     parser.add_argument('--section', type=int, choices=range(1, 6), default=1)
     args = parser.parse_args()
-    if args.lab7 and args.section != 1:
-        parser.error('--lab7 requires --section 1')
-    run(load_settings(args.config), args.lab7, args.section)
+    run(load_settings(args.config), section=args.section)
 
 
 if __name__ == '__main__':
