@@ -157,8 +157,8 @@ def main():
     import cv2
     from djitellopy import Tello
 
-    stage3_flag = False  # Triggers the forward move later in the same frame.
-    # Load camera calibration so ArUco pose estimates are in centimeters.
+    stage3_flag = False
+    stage4_start_flag = False
     calibration = Path(__file__).resolve().with_name('camera.xml')
     fs = cv2.FileStorage(str(calibration), cv2.FILE_STORAGE_READ)
     try:
@@ -322,10 +322,7 @@ def main():
                         Z = position[2]
 
                         print(f"Z-TARGET_DISTANCE {Z-TARGET_DISTANCE_3}")
-                        if Z-TARGET_DISTANCE_3 > 25:
-                            command = controller.velocity_new(position=position, target_x=0, stage=3, target_y=0, target_z=TARGET_DISTANCE_3)
-                        print(f"Z-TARGET_DISTANCE {Z-TARGET_DISTANCE_3}")
-                        if Z-TARGET_DISTANCE_3 > 25:
+                        if Z-TARGET_DISTANCE_3 > 30:
                             command = controller.velocity_new(position=position, target_x=0, stage=3, target_y=0, target_z=TARGET_DISTANCE_3)
                         else:
                             print("Goes DOWNNN")
@@ -341,10 +338,16 @@ def main():
                         stage3_flag = False
                         print("drone.move_forward(300)")
                         drone.move_down(60)
-                        drone.move_forward(300)
-                        print("drone.move_forward(300)")
-                        drone.move_down(60)
-                        drone.move_forward(300)
+                        drone.move_forward(260)
+                        drone.rotate_clockwise(90)
+                        stage4_start_flag = True
+
+                    if ids[0, 0] == 4:
+                        stage4_start_flag = False
+
+                    if stage4_start_flag:
+                        # stage4_start_flag = False
+                        drone.move_up(5)
 
                 else:
                     controller.reset()
