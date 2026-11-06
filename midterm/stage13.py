@@ -24,7 +24,7 @@ from pyimagesearch.pid import PID
 
 MARKER_LENGTH = 15.0  # Physical printed marker side length, centimeters.
 TARGET_DISTANCE = 120.0  # Camera Z distance, centimeters.
-TARGET_DISTANCE_3 = 50.0  # Used in the marker-3 branch test, not its PID Z target.
+TARGET_DISTANCE_3 = 40.0  # Used in the marker-3 branch test, not its PID Z target.
 TARGET_ID = 1  # Display/initial target value; marker filtering below is disabled.
 MAX_SPEED = 25  # RC velocity limit in cm/s.
 DEADBAND = 3.0  # Position tolerance in centimeters.
@@ -116,7 +116,7 @@ class MarkerController:
         return (0, forward, vertical, yaw)
 
 
-    def velocity_new(self, position, target_x, stage = 2, target_y = 0):
+    def velocity_new(self, position, target_x, stage = -1, target_y = 0, target_z = TARGET_DISTANCE):
         """Strafe toward target_x while regulating Z to TARGET_DISTANCE.
 
         stage=1 disables vertical correction; any other stage enables it.
@@ -126,12 +126,12 @@ class MarkerController:
         Heading PID is calculated, but the returned yaw command is always zero.
         """
         x, y, z = map(float, position)
-        mult = 0 if stage == 1 else 1
+        mult = 0 if stage == 1 else 1 # 預設考慮y方向error
+        mult_yaw = 1 if stage == 2 else 0 # 預設不考慮轉頭error
         if not all(isfinite(value) for value in (x, y, z)) or z <= 0:
             self.reset()
             return STOP
         heading = degrees(atan2(x, z))
-        errors = (x-target_x, z - target_z, (target_y - y) * mult, heading)
         errors = (x-target_x, z - target_z, (target_y - y) * mult, heading)
         if not self.ready:
             for pid, error in zip(self.axes, errors):
@@ -149,7 +149,7 @@ class MarkerController:
 
         # if abs(heading) > TURN_FIRST_ANGLE:
         #     forward = 0
-        return (parallel, forward, vertical, 0)  # Keep the course heading fixed.
+        return (parallel, forward, vertical, yaw * mult_yaw)  # Keep the course heading fixed.
 
 
 
@@ -284,7 +284,7 @@ def main():
                             command = controller.velocity_new(position, 0, 1)
                         else:
                             # Target marker X=-50: strafe right so it appears to the left.
-                            command = controller.velocity_new(position, -50, 1)
+                            command = controller.velocity_new(position, -50, 1, 0)
                             
                     # SECTION 1, second obstacle: marker 2.
                     elif int(ids[0, 0]) == 2:
@@ -296,12 +296,14 @@ def main():
 
                         # command = controller.velocity(position)
                         print(f"Z-TARGET_DISTANCE = {Z-TARGET_DISTANCE}")
-                        if Z-TARGET_DISTANCE > 5:
+                        if Z-TARGET_DISTANCE > 10:
                             # Z > 125 cm: approach centered, without vertical correction.
                             command = controller.velocity_new(position, 0, 1)
                         else:
                             # Target marker X=+50: strafe left so it appears to the right.
-                            command = controller.velocity_new(position, 50, 1)
+                            # command = controller.velocity_new(position, 50, 1)
+                            print("MOVE LEFT")
+                            drone.move_left(50)
 
                     # SECTION 2
                     elif int(ids[0, 0]) == 0:
@@ -311,7 +313,7 @@ def main():
                         print("ids = 0")
                         controller.set_follow()
                         print(f"Z-TARGET_DISTANCE = {Z-TARGET_DISTANCE}")
-                        command = controller.velocity_new(position, 0, 1)
+                        command = controller.velocity_new(position, 0, 2)
 
                     # SECTION 3: marker 3 directly, with no marker-0 following stage.
                     elif int(ids[0, 0]) == 3:
@@ -325,8 +327,6 @@ def main():
                         if Z-TARGET_DISTANCE_3 > 30:
                             command = controller.velocity_new(position=position, target_x=0, stage=3, target_y=0, target_z=TARGET_DISTANCE_3)
                         else:
-                            print("Goes DOWNNN")
-                            command = controller.velocity_new(position=position, target_x=0, stage=3, target_y=-60, target_z=TARGET_DISTANCE_3)
                             print("Goes DOWNNN")
                             command = controller.velocity_new(position=position, target_x=0, stage=3, target_y=-60, target_z=TARGET_DISTANCE_3)
                             stage3_flag = True
