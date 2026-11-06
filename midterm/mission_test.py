@@ -44,7 +44,7 @@ STOP = (0, 0, 0, 0)  # RC order: left/right, forward/back, up/down, yaw.
 ID_START = 4             # 看到它就接手：先對準 marker 4
 ID_END = 5               # 對準 marker 4 後向左平移要找的 marker
 M45_TARGET_DISTANCE = 150.0  # 對準 marker 4 / marker 5 時保持的 Z 距離 (cm)
-M45_DEADBAND = 5.0       # mission45 位置容許誤差 (cm)，與 stage13 的 DEADBAND 無關
+M45_DEADBAND = 3.0       # mission45 位置容許誤差 (cm)，與 stage13 的 DEADBAND 無關
 M45_MAX_SPEED = 25       # mission45 PID 輸出的 RC 速度上限
 STRAFE_SPEED = 30        # 向左平移速度 (送出 -STRAFE_SPEED；負 = 向左)
 STRAFE_TIMEOUT = 20.0    # 平移超過這個秒數還沒看到 marker 5 就放棄
@@ -256,6 +256,7 @@ def main():
     last_frame_time = monotonic()
     command = STOP
     manual_command = STOP
+    stage4_dis = 0
     manual_until = 0.0
     window = f'Tello PID - {TARGET_DISTANCE:g} cm'
     drone = Tello()
@@ -331,6 +332,9 @@ def main():
                 else:
                     corners, ids, _ = aruco.detectMarkers(frame, dictionary, parameters=parameters)
                 if ids is not None and len(corners):
+                    order = ids.flatten().argsort()
+                    ids = ids[order]
+                    corners = [corners[index] for index in order]
                     aruco.drawDetectedMarkers(frame, corners, ids)
                     if target_id is None:
                         target_id = int(ids[0, 0])
@@ -505,14 +509,17 @@ def main():
                         stage3_flag = False
                         print("drone.move_forward(300)")
                         drone.move_down(60)
-                        drone.move_forward(250)
+                        drone.move_forward(220)
                         drone.rotate_clockwise(90)
+                        drone.move_back(30)
                         stage4_start_flag = True
+                        stage4_dis = 45
 
                     if stage4_start_flag:
                         # stage4_start_flag = False
                         print("MOVE UP")
-                        drone.move_up(50)
+                        drone.move_up(min(20, int(stage4_dis)))
+                        stage4_dis *= 0.95
 
                 else:
                     controller.reset()
