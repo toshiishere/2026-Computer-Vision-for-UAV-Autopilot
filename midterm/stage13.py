@@ -268,10 +268,10 @@ def main():
                         cv2.drawFrameAxes(frame, intrinsic, distortion,
                                           rvecs[0], tvecs[0], MARKER_LENGTH / 2)
                         # break
-                if tracking and drone.is_flying and position is not None and not manual_active:
+                if (tracking and drone.is_flying and position is not None and not manual_active) or stage4_start_flag:
                     # SECTION 1, first obstacle: marker 1.
                     # The test is one-sided Z error, not full X/Y/Z alignment.
-                    if int(ids[0, 0]) == 1:
+                    if ids is not None and int(ids[0, 0]) == 1:
                         print("ids = 1")
                         X = position[0]
                         Y = position[1]
@@ -287,7 +287,7 @@ def main():
                             command = controller.velocity_new(position, -50, 1, 0)
                             
                     # SECTION 1, second obstacle: marker 2.
-                    elif int(ids[0, 0]) == 2:
+                    elif ids is not None and int(ids[0, 0]) == 2:
                         print("ids = 2")
                         X = position[0]
                         Y = position[1]
@@ -306,7 +306,7 @@ def main():
                             drone.move_left(50)
 
                     # SECTION 2
-                    elif int(ids[0, 0]) == 0:
+                    elif ids is not None and int(ids[0, 0]) == 0:
                         X = position[0]
                         Y = position[1]
                         Z = position[2]
@@ -316,7 +316,7 @@ def main():
                         command = controller.velocity_new(position, 0, 2, 0, TARGET_DISTANCE_2)
 
                     # SECTION 3: marker 3 directly, with no marker-0 following stage.
-                    elif int(ids[0, 0]) == 3:
+                    elif ids is not None and int(ids[0, 0]) == 3:
                         controller.unset_set_follow()
                         print("id = 3")
                         X = position[0]
@@ -330,7 +330,7 @@ def main():
                             print("Goes DOWNNN")
                             command = controller.velocity_new(position=position, target_x=0, stage=3, target_y=-60, target_z=TARGET_DISTANCE_3)
                             stage3_flag = True
-                    elif ids[0, 0] == 4:
+                    elif ids is not None and int(ids[0, 0]) == 4:
                         stage4_start_flag = False
 
                     if stage3_flag == True:
@@ -340,14 +340,14 @@ def main():
                         stage3_flag = False
                         print("drone.move_forward(300)")
                         drone.move_down(60)
-                        drone.move_forward(260)
+                        drone.move_forward(250)
                         drone.rotate_clockwise(90)
                         stage4_start_flag = True
 
                     if stage4_start_flag:
                         # stage4_start_flag = False
                         print("MOVE UP")
-                        drone.move_up(100)
+                        drone.move_up(50)
 
                 else:
                     controller.reset()
