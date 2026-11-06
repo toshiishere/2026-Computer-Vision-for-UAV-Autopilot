@@ -1,8 +1,8 @@
-"""Practice course sections 1 and 3, skipping section 2's marker-0 following.
+"""Practice course sections 1, 2, and 3, followed by mission45.
 
 Intended route: marker 1 -> pass right -> marker 2 -> pass left -> marker 3.
-The current code chooses a branch from the visible marker ID each frame;
-it does not store a course phase or enforce this marker order.
+Section 2 follows marker 0 until it is absent for one continuous second,
+then Section 3 tracks marker 3. Mission45 can only start after this transition.
 
 Marker 1: if Z > 125 cm, center and approach; otherwise target X = -50 cm.
 Marker 2: if Z > 125 cm, center and approach; otherwise target X = +50 cm.
@@ -51,7 +51,7 @@ STRAFE_TIMEOUT = 20.0    # 平移超過這個秒數還沒看到 marker 5 就放�
 ALIGN_HOLD_FRAMES = 5    # 需「連續」N 幀都在誤差內，才算真的對準
 BACK_DISTANCE = 160.0    # marker 5 置中後，後退的目標距離 Z (cm)
 BACK_TOL = 5.0           # Z 進入 BACK_DISTANCE ± BACK_TOL 就「立即」降落 (不需連續多幀)
-BACK_TIMEOUT = 30.0      # 後退超過這個秒數還沒到位就直接降落
+BACK_TIMEOUT = 60.0      # 後退超過這個秒數還沒到位就直接降落
 ALIGN_4, STRAFE_LEFT, ALIGN_5, BACK_OFF, DONE = (
     'ALIGN_4', 'STRAFE_LEFT', 'ALIGN_5', 'BACK_OFF', 'DONE')
 
@@ -224,6 +224,8 @@ def main():
     from djitellopy import Tello
 
     stage3_flag = False
+    section = 1
+    marker0_missing_since = None
     stage4_start_flag = False
     m45_state = None           # None = 還沒看到 marker 4，仍跑 stage13 原本邏輯
     hold = 0                   # mission45 已連續對準的幀數
@@ -286,6 +288,8 @@ def main():
                 tracking = True
                 command = STOP
                 m45_state, hold = None, 0   # 重新從 stage13 開頭開始
+                section = 1
+                marker0_missing_since = None
                 controller.reset()
             elif key == ord('2'):
                 manual_until = 0.0
@@ -309,6 +313,7 @@ def main():
                 controller.reset()
             manual_active = drone.is_flying and monotonic() < manual_until
             if manual_active or not tracking:
+                marker0_missing_since = None
                 # 手動或暫停時清掉 mission45 的 PID 記憶與對準計數，交還控制時重新開始
                 align.reset()
                 hold = 0
@@ -354,9 +359,32 @@ def main():
                                           rvecs[0], tvecs[0], MARKER_LENGTH / 2)
                         positions[int(marker_id)] = position
                         # break
+                # Only advance from Section 2 after a full second without ID 0.
+                if tracking and drone.is_flying and not manual_active and m45_state is None:
+                    marker0_visible = ids is not None and 0 in ids.flatten()
+                    if marker0_visible and section != 2:
+                        section = 2
+                        marker0_missing_since = None
+                        stage3_flag = False
+                        stage4_start_flag = False
+                        controller.set_follow()
+                        controller.reset()
+                    if section == 2:
+                        if marker0_visible:
+                            marker0_missing_since = None
+                        elif marker0_missing_since is None:
+                            marker0_missing_since = monotonic()
+                        elif monotonic() - marker0_missing_since >= 1.0:
+                            section = 3
+                            marker0_missing_since = None
+                            controller.unset_set_follow()
+                            controller.reset()
+                            print('ID 0 missing for 1 second -> Section 3')
+                    if section in (2, 3):
+                        position = positions.get(0 if section == 2 else 3)
                 # ---- 看到 marker 4：停止 stage13 流程，改由 mission45 接手 ----
                 if (tracking and drone.is_flying and not manual_active
-                        and m45_state is None and ID_START in positions):
+                        and section == 3 and m45_state is None and ID_START in positions):
                     m45_state, hold = ALIGN_4, 0
                     stage4_start_flag = False   # 不再繼續上升
                     align.reset()
@@ -440,7 +468,7 @@ def main():
                 elif (tracking and drone.is_flying and position is not None and not manual_active) or stage4_start_flag:
                     # SECTION 1, first obstacle: marker 1.
                     # The test is one-sided Z error, not full X/Y/Z alignment.
-                    if ids is not None and int(ids[0, 0]) == 1:
+                    if section == 1 and ids is not None and int(ids[0, 0]) == 1:
                         print("ids = 1")
                         X = position[0]
                         Y = position[1]
@@ -456,7 +484,7 @@ def main():
                             command = controller.velocity_new(position, -50, 1, 0)
                             
                     # SECTION 1, second obstacle: marker 2.
-                    elif ids is not None and int(ids[0, 0]) == 2:
+                    elif section == 1 and ids is not None and int(ids[0, 0]) == 2:
                         print("ids = 2")
                         X = position[0]
                         Y = position[1]
@@ -472,21 +500,19 @@ def main():
                             # Target marker X=+50: strafe left so it appears to the right.
                             # command = controller.velocity_new(position, 50, 1)
                             print("MOVE LEFT")
-                            drone.move_left(50)
+                            drone.move_left(100)
 
                     # SECTION 2
-                    elif ids is not None and int(ids[0, 0]) == 0:
+                    elif section == 2 and 0 in positions:
                         X = position[0]
                         Y = position[1]
                         Z = position[2]
                         print("ids = 0")
-                        controller.set_follow()
                         print(f"Z-TARGET_DISTANCE = {Z-TARGET_DISTANCE_2}")
                         command = controller.velocity_new(position, 0, 2, 0, TARGET_DISTANCE_2)
 
-                    # SECTION 3: marker 3 directly, with no marker-0 following stage.
-                    elif ids is not None and int(ids[0, 0]) == 3:
-                        controller.unset_set_follow()
+                    # SECTION 3: marker 3 after the marker-0 loss timeout.
+                    elif section == 3 and 3 in positions:
                         print("id = 3")
                         X = position[0]
                         Y = position[1]
@@ -511,15 +537,15 @@ def main():
                         drone.move_down(60)
                         drone.move_forward(220)
                         drone.rotate_clockwise(90)
-                        drone.move_back(30)
+                        drone.move_back(80)
                         stage4_start_flag = True
-                        stage4_dis = 45
+                        stage4_dis = 60
 
                     if stage4_start_flag:
                         # stage4_start_flag = False
                         print("MOVE UP")
                         drone.move_up(min(20, int(stage4_dis)))
-                        stage4_dis *= 0.95
+                        stage4_dis *= 0.9
 
                 else:
                     controller.reset()
@@ -556,6 +582,7 @@ def main():
                 command = STOP
             # Stop automatic movement if video has not updated for 0.3 seconds.
             if not manual_active and monotonic() - last_frame_time > 0.3:
+                marker0_missing_since = None
                 command = STOP
                 controller.reset()
             if drone.is_flying:
