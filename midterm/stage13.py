@@ -30,7 +30,7 @@ TARGET_ID = 1  # Display/initial target value; marker filtering below is disable
 MAX_SPEED = 25  # RC velocity limit in cm/s.
 DEADBAND = 3.0  # Position tolerance in centimeters.
 YAW_DEADBAND = 3.0  # Heading tolerance in degrees.
-MAX_YAW_SPEED = 20  # Yaw RC limit in degrees/s.
+MAX_YAW_SPEED = 50  # Yaw RC limit in degrees/s.
 TURN_FIRST_ANGLE = 15.0  # Face the marker before moving forward/back.
 MANUAL_TIMEOUT = 0.5  # Seconds after the last movement key event.
 STOP = (0, 0, 0, 0)  # RC order: left/right, forward/back, up/down, yaw.
@@ -79,7 +79,7 @@ class MarkerController:
 
     def set_follow(self):
         # Clear accumulated integral and derivative history after interruptions.
-        self.axes = [PID(kP=1.0, kI=0.1, kD=0.1),
+        self.axes = [PID(kP=0, kI=0, kD=0),
                     PID(kP=1.0, kI=0.1, kD=0.1),
                     PID(kP=1, kI=0.07, kD=0.1),
                     PID(kP=2.0, kI=0.2, kD=0.1)]
@@ -330,6 +330,8 @@ def main():
                             print("Goes DOWNNN")
                             command = controller.velocity_new(position=position, target_x=0, stage=3, target_y=-60, target_z=TARGET_DISTANCE_3)
                             stage3_flag = True
+                    elif ids[0, 0] == 4:
+                        stage4_start_flag = False
 
                     if stage3_flag == True:
                         # Blocking SDK command: fly forward 150 cm before the loop resumes.
@@ -342,12 +344,10 @@ def main():
                         drone.rotate_clockwise(90)
                         stage4_start_flag = True
 
-                    if ids[0, 0] == 4:
-                        stage4_start_flag = False
-
                     if stage4_start_flag:
                         # stage4_start_flag = False
-                        drone.move_up(5)
+                        print("MOVE UP")
+                        drone.move_up(100)
 
                 else:
                     controller.reset()
