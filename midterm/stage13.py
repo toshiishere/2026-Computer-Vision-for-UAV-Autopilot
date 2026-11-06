@@ -24,6 +24,7 @@ from pyimagesearch.pid import PID
 
 MARKER_LENGTH = 15.0  # Physical printed marker side length, centimeters.
 TARGET_DISTANCE = 120.0  # Camera Z distance, centimeters.
+TARGET_DISTANCE_2 = 80
 TARGET_DISTANCE_3 = 40.0  # Used in the marker-3 branch test, not its PID Z target.
 TARGET_ID = 1  # Display/initial target value; marker filtering below is disabled.
 MAX_SPEED = 25  # RC velocity limit in cm/s.
@@ -67,8 +68,7 @@ class MarkerController:
         self.axes = [PID(kP=1.0, kI=0.1, kD=0.1),
                      PID(kP=1.0, kI=0.1, kD=0.1),
                      PID(kP=1.0, kI=0.1, kD=0.1),
-                     PID(kP=1, kI=0.1, kD=0.1),
-                     PID(kP=1.0, kI=0, kD=0.1)]
+                     PID(kP=1, kI=0.02, kD=0.1)]
         self.reset()
 
     def reset(self):
@@ -82,13 +82,13 @@ class MarkerController:
         self.axes = [PID(kP=1.0, kI=0.1, kD=0.1),
                     PID(kP=1.0, kI=0.1, kD=0.1),
                     PID(kP=1, kI=0.07, kD=0.1),
-                    PID(kP=2.0, kI=0.1, kD=0.1)]
+                    PID(kP=2.0, kI=0.2, kD=0.1)]
     def unset_set_follow(self):
         # Clear accumulated integral and derivative history after interruptions.
         self.axes = [PID(kP=1.0, kI=0.1, kD=0.1),
-                        PID(kP=1.0, kI=0.07, kD=0.1),
-                        PID(kP=1, kI=0.1, kD=0.1),
-                        PID(kP=1.0, kI=0, kD=0.1)]
+                     PID(kP=1.0, kI=0.1, kD=0.1),
+                     PID(kP=1.0, kI=0.1, kD=0.1),
+                     PID(kP=1, kI=0.02, kD=0.1)]
     def velocity(self, position):
         """Older forward/vertical/yaw follower; main() uses velocity_new()."""
         x, y, z = map(float, position)
@@ -312,8 +312,8 @@ def main():
                         Z = position[2]
                         print("ids = 0")
                         controller.set_follow()
-                        print(f"Z-TARGET_DISTANCE = {Z-TARGET_DISTANCE}")
-                        command = controller.velocity_new(position, 0, 2)
+                        print(f"Z-TARGET_DISTANCE = {Z-TARGET_DISTANCE_2}")
+                        command = controller.velocity_new(position, 0, 2, 0, TARGET_DISTANCE_2)
 
                     # SECTION 3: marker 3 directly, with no marker-0 following stage.
                     elif int(ids[0, 0]) == 3:
