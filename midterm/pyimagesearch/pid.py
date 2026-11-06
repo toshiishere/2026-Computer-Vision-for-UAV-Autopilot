@@ -4,6 +4,11 @@ import time
 class PID:
 	def __init__(self, kP=1, kI=0, kD=0):
 		# initialize gains
+		self.currTime = time.time()
+		self.prevTime = self.currTime
+
+		# initialize the previous error
+		self.prevError = 0
 		self.kP = kP
 		self.kI = kI
 		self.kD = kD
