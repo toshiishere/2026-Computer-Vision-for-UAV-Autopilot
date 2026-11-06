@@ -32,7 +32,7 @@ TARGET_DISTANCE = 120.0  # Camera Z distance, centimeters.
 TARGET_DISTANCE_2 = 80
 TARGET_DISTANCE_3 = 40.0  # Used in the marker-3 branch test, not its PID Z target.
 TARGET_ID = 1  # Display/initial target value; marker filtering below is disabled.
-MAX_SPEED = 25  # RC velocity limit in cm/s.
+MAX_SPEED = 30  # RC velocity limit in cm/s.
 DEADBAND = 3.0  # Position tolerance in centimeters.
 YAW_DEADBAND = 3.0  # Heading tolerance in degrees.
 MAX_YAW_SPEED = 50  # Yaw RC limit in degrees/s.
@@ -45,7 +45,7 @@ ID_START = 4             # 看到它就接手：先對準 marker 4
 ID_END = 5               # 對準 marker 4 後向左平移要找的 marker
 M45_TARGET_DISTANCE = 150.0  # 對準 marker 4 / marker 5 時保持的 Z 距離 (cm)
 M45_DEADBAND = 3.0       # mission45 位置容許誤差 (cm)，與 stage13 的 DEADBAND 無關
-M45_MAX_SPEED = 25       # mission45 PID 輸出的 RC 速度上限
+M45_MAX_SPEED = 30       # mission45 PID 輸出的 RC 速度上限
 STRAFE_SPEED = 30        # 向左平移速度 (送出 -STRAFE_SPEED；負 = 向左)
 STRAFE_TIMEOUT = 20.0    # 平移超過這個秒數還沒看到 marker 5 就放棄
 ALIGN_HOLD_FRAMES = 5    # 需「連續」N 幀都在誤差內，才算真的對準
@@ -181,7 +181,7 @@ class AlignController:
     """
 
     def __init__(self):
-        self.axes = [PID(kP=0.7, kI=0.02, kD=0.1),     # 左右
+        self.axes = [PID(kP=0.7, kI=0.002, kD=0.1),     # 左右
                      PID(kP=0.7, kI=0.002, kD=0.15)]   # 前後
         self.reset()
 

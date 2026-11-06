@@ -12,11 +12,6 @@
   ALIGN_5     看到 marker 5 -> 煞車,再用 PID 把 marker 5 置中 (x≈0) 並保持距離
   BACK_OFF    marker 5 置中後,邊保持置中邊後退,直到與 marker 5 相距 BACK_DISTANCE (150 cm)
   DONE        到位後自動降落,任務結束
-
-畫面會顯示目標 marker 的 X / Y / Z、距離與轉向誤差 (同原本的 pid_control.py)。
-
-需要的檔案: camera.xml (相機校正檔,需含 intrinsic / distortion)
-            pyimagesearch/pid.py (你原本就有的 PID 類別)
 """
 from math import atan2, degrees, isfinite, sqrt
 import logging
@@ -79,7 +74,7 @@ class AlignController:
     """用 2 個 PID 對準標記:左右 (x) 與前後 (z)。"""
 
     def __init__(self):
-        self.axes = [PID(kP=0.7, kI=0.02, kD=0.1),    # 左右
+        self.axes = [PID(kP=0.7, kI=0.002, kD=0.1),    # 左右
                      PID(kP=0.7, kI=0.002, kD=0.15)]   # 前後
         self.reset()
 
@@ -271,7 +266,7 @@ def main():
                     # --- 狀態 2:向左平移直到看到 marker 5 ---
                     elif state == STRAFE_LEFT:
                         if ID_END in positions:
-                            state = ALIGN_5                # 看到了!先煞車,下一幀開始置中
+                            state = ALIGN_5                # 看到了先煞車,下一幀開始置中
                             hold = 0
                             controller.reset()
                             command = STOP
