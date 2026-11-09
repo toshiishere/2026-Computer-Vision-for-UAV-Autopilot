@@ -48,7 +48,7 @@ M45_DEADBAND = 3.0       # mission45 位置容許誤差 (cm)，與 stage13 的 D
 M45_MAX_SPEED = 30       # mission45 PID 輸出的 RC 速度上限
 STRAFE_SPEED = 30        # 向左平移速度 (送出 -STRAFE_SPEED；負 = 向左)
 STRAFE_TIMEOUT = 20.0    # 平移超過這個秒數還沒看到 marker 5 就放棄
-ALIGN_HOLD_FRAMES = 5    # 需「連續」N 幀都在誤差內，才算真的對準
+ALIGN_HOLD_FRAMES = 3    # 需「連續」N 幀都在誤差內，才算真的對準
 BACK_DISTANCE = 160.0    # marker 5 置中後，後退的目標距離 Z (cm)
 BACK_TOL = 5.0           # Z 進入 BACK_DISTANCE ± BACK_TOL 就「立即」降落 (不需連續多幀)
 BACK_TIMEOUT = 60.0      # 後退超過這個秒數還沒到位就直接降落
@@ -551,12 +551,12 @@ def main():
                         drone.rotate_clockwise(90)
                         drone.move_back(80)
                         stage4_start_flag = True
-                        stage4_dis = 60
+                        stage4_dis = 50
 
                     if stage4_start_flag:
                         # stage4_start_flag = False
                         print("MOVE UP")
-                        drone.move_up(min(20, int(stage4_dis)))
+                        drone.move_up(max(20, int(stage4_dis)))
                         stage4_dis *= 0.9
 
                 else:
