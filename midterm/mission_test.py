@@ -6,8 +6,8 @@ then Section 3 tracks marker 3. Mission45 can only start after this transition.
 
 Marker 1: if Z > 125 cm, center and approach; otherwise target X = -50 cm.
 Marker 2: if Z > 125 cm, center and approach; otherwise target X = +50 cm.
-Marker 3: if Z > 100 cm, target X/Y = 0; otherwise target Y = -55 cm
-and immediately issue a blocking move_forward(150).
+Marker 3: align position/yaw with its normal at a perpendicular distance of
+100 cm and center Y, then run the blocking obstacle-passing sequence.
 All velocity_new() branches still use a Z target of 120 cm.
 
 1: take off and track; 2: land; 3/Space: hover; T: resume; Q/Esc: exit.
@@ -17,7 +17,8 @@ Gains and limits below are starting values and require flight tuning.
 
 After marker 3: once marker 4 is seen, the mission45 routine takes over (own
 AlignController PIDs, independent of MarkerController): align marker 4 ->
-strafe left until marker 5 -> center marker 5 -> back off to Z = 160 +- 5 cm
+strafe left until marker 5 -> align with marker 5's normal -> back off to
+a perpendicular marker-plane distance of 160 +- 5 cm
 -> land immediately.
 """
 from math import atan2, degrees, isfinite, sqrt
@@ -30,12 +31,12 @@ from pyimagesearch.pid import PID
 MARKER_LENGTH = 15.0  # Physical printed marker side length, centimeters.
 TARGET_DISTANCE = 120.0  # Camera Z distance, centimeters.
 TARGET_DISTANCE_2 = 80
-TARGET_DISTANCE_3 = 100.0  # Used in the marker-3 branch test, not its PID Z target.
+TARGET_DISTANCE_3 = 100.0  # Marker-3 perpendicular plane-distance target (cm).
 TARGET_ID = 1  # Display/initial target value; marker filtering below is disabled.
 MAX_SPEED = 30  # RC velocity limit in cm/s.
 DEADBAND = 3.0  # Position tolerance in centimeters.
 YAW_DEADBAND = 3.0  # Heading tolerance in degrees.
-MAX_YAW_SPEED = 50  # Yaw RC limit in degrees/s.
+MAX_YAW_SPEED = 60  # Yaw RC limit in degrees/s.
 TURN_FIRST_ANGLE = 15.0  # Face the marker before moving forward/back.
 MANUAL_TIMEOUT = 0.5  # Seconds after the last movement key event.
 STOP = (0, 0, 0, 0)  # RC order: left/right, forward/back, up/down, yaw.
@@ -43,17 +44,21 @@ STOP = (0, 0, 0, 0)  # RC order: left/right, forward/back, up/down, yaw.
 # ===== mission45：看到 marker 4 之後的流程 (參數與 PID 都獨立於上面 stage13 的設定) =====
 ID_START = 4             # 看到它就接手：先對準 marker 4
 ID_END = 5               # 對準 marker 4 後向左平移要找的 marker
-M45_TARGET_DISTANCE = 150.0  # 對準 marker 4 / marker 5 時保持的 Z 距離 (cm)
+M45_TARGET_DISTANCE = 150.0  # Perpendicular marker-plane alignment distance (cm).
 M45_DEADBAND = 3.0       # mission45 位置容許誤差 (cm)，與 stage13 的 DEADBAND 無關
 M45_MAX_SPEED = 30       # mission45 PID 輸出的 RC 速度上限
 STRAFE_SPEED = 30        # 向左平移速度 (送出 -STRAFE_SPEED；負 = 向左)
 STRAFE_TIMEOUT = 20.0    # 平移超過這個秒數還沒看到 marker 5 就放棄
 ALIGN_HOLD_FRAMES = 3    # 需「連續」N 幀都在誤差內，才算真的對準
-BACK_DISTANCE = 160.0    # marker 5 置中後，後退的目標距離 Z (cm)
-BACK_TOL = 5.0           # Z 進入 BACK_DISTANCE ± BACK_TOL 就「立即」降落 (不需連續多幀)
+BACK_DISTANCE = 150.0    # Perpendicular marker-plane back-off distance (cm).
+BACK_TOL = 5.0           # Land immediately within this plane-distance tolerance.
 BACK_TIMEOUT = 60.0      # 後退超過這個秒數還沒到位就直接降落
 ALIGN_4, STRAFE_LEFT, ALIGN_5, BACK_OFF, DONE = (
     'ALIGN_4', 'STRAFE_LEFT', 'ALIGN_5', 'BACK_OFF', 'DONE')
+M45_YAW_DEADBAND = 3.0  # Normal heading tolerance, degrees.
+M45_MAX_YAW_SPEED = 30
+ALIGN_YAW_KP = 0.4  # IDs 3/4/5: half the original MarkerController yaw P (0.8).
+# M45_TARGET_DISTANCE and BACK_DISTANCE are perpendicular plane distances (cm).
 
 MOVEMENT = {
     ord('w'): (0, 40, 0, 0), ord('s'): (0, -40, 0, 0),
@@ -88,7 +93,7 @@ class MarkerController:
         self.axes = [PID(kP=1.0, kI=0.1, kD=0.1),
                      PID(kP=1.0, kI=0.1, kD=0.1),
                      PID(kP=1.0, kI=0.1, kD=0.1),
-                     PID(kP=1, kI=0.02, kD=0.1)]
+                     PID(kP=0.8, kI=0.02, kD=0.1)]
         self.reset()
 
     def reset(self):
@@ -108,7 +113,7 @@ class MarkerController:
         self.axes = [PID(kP=1.0, kI=0.1, kD=0.1),
                      PID(kP=1.0, kI=0.1, kD=0.1),
                      PID(kP=1.0, kI=0.1, kD=0.1),
-                     PID(kP=1, kI=0.02, kD=0.1)]
+                     PID(kP=0.8, kI=0.02, kD=0.1)]
     def velocity(self, position):
         """Older forward/vertical/yaw follower; main() uses velocity_new()."""
         x, y, z = map(float, position)
@@ -174,7 +179,7 @@ class MarkerController:
 
 
 class AlignController:
-    """mission45 專用：2 個獨立 PID 對準標記，左右 (x) 與前後 (z)。
+    """Align position and yaw with the marker-plane normal for IDs 3, 4, 5.
 
     與 MarkerController 完全分開 (各自的 PID 物件、增益、容許誤差、限幅)，
     stage13 的 set_follow()/unset_set_follow() 不會影響它。
@@ -182,7 +187,9 @@ class AlignController:
 
     def __init__(self):
         self.axes = [PID(kP=0.7, kI=0.002, kD=0.1),     # 左右
-                     PID(kP=0.7, kI=0.002, kD=0.15)]   # 前後
+                     PID(kP=0.7, kI=0.002, kD=0.15),   # 前後
+                     PID(kP=ALIGN_YAW_KP, kI=0.02, kD=0.1),  # independent yaw
+                     PID(kP=1.0, kI=0.1, kD=0.1)]      # optional vertical
         self.reset()
 
     def reset(self):
@@ -191,15 +198,39 @@ class AlignController:
             pid.initialize()
         self.ready = False
 
-    def velocity(self, position, target_z=M45_TARGET_DISTANCE):
-        """回傳 (rc指令, 是否已在誤差範圍內)。x 向右、z 向前，單位 cm。"""
-        x, _, z = map(float, position)
-        if not all(isfinite(v) for v in (x, z)) or z <= 0:
+    def velocity(self, position, normal, target_distance=M45_TARGET_DISTANCE,
+                 target_y=None):
+        """Return (RC, aligned), using the plane normal in camera coordinates.
+
+        The normal points into the marker (positive camera Z). At the current
+        height, target a point on its normal in X/Z and face the marker plane.
+        target_y enables vertical centering for marker 3; otherwise vertical RC
+        remains zero. Pitch/roll are not controlled.
+        """
+        x, y, z = map(float, position)
+        nx, ny, nz = map(float, normal)
+        length = sqrt(nx*nx + ny*ny + nz*nz)
+        if (not all(isfinite(v) for v in (x, y, z, nx, ny, nz, length,
+                                          target_distance))
+                or z <= 0 or length <= 0 or target_distance <= 0
+                or (target_y is not None and not isfinite(target_y))):
             self.reset()
             return STOP, False
 
-        # x 為正 = 標記在右邊 -> 向右；z 大於目標 -> 前進
-        errors = (x, z - target_z)
+        nx, ny, nz = nx / length, ny / length, nz / length
+        if nz < 0:
+            nx, ny, nz = -nx, -ny, -nz
+        horizontal_squared = nx*nx + nz*nz
+        if nz <= 0 or horizontal_squared < 0.01:
+            self.reset()
+            return STOP, False
+        # n dot t is perpendicular distance. Account for fixed camera height
+        # when solving for target X/Z, including markers tilted vertically.
+        scale = (target_distance - ny*y) / horizontal_squared
+        heading = degrees(atan2(nx, nz))
+        errors = (x - scale*nx, z - scale*nz, heading)
+        if target_y is not None:
+            errors += (target_y - y,)
 
         if not self.ready:
             # 第一次取得誤差時，把 prevError 設成目前誤差，避免微分項暴衝
@@ -209,14 +240,20 @@ class AlignController:
             self.ready = True
 
         speeds = []
-        for pid, error in zip(self.axes, errors):
+        tolerances = (M45_DEADBAND, M45_DEADBAND, M45_YAW_DEADBAND)
+        limits = (M45_MAX_SPEED, M45_MAX_SPEED, M45_MAX_YAW_SPEED)
+        if target_y is not None:
+            tolerances += (DEADBAND,)
+            limits += (MAX_SPEED,)
+        for pid, error, tolerance, limit in zip(self.axes, errors, tolerances, limits):
             output = pid.update(error, sleep=0)
-            speeds.append(0 if abs(error) <= M45_DEADBAND else
-                          int(round(max(-M45_MAX_SPEED, min(M45_MAX_SPEED, output)))))
+            speeds.append(0 if abs(error) <= tolerance else
+                          int(round(max(-limit, min(limit, output)))))
 
-        in_tolerance = all(abs(e) <= M45_DEADBAND for e in errors)
-        lr, fb = speeds
-        return (lr, fb, 0, 0), in_tolerance   # 不控制上下與偏航
+        in_tolerance = all(abs(e) <= tol for e, tol in zip(errors, tolerances))
+        lr, fb, yaw = speeds[:3]
+        vertical = speeds[3] if target_y is not None else 0
+        return (lr, fb, vertical, yaw), in_tolerance
 
 
 def main():
@@ -252,6 +289,7 @@ def main():
     detector = (aruco.ArucoDetector(dictionary, parameters)
                 if hasattr(aruco, 'ArucoDetector') else None)
     controller = MarkerController()
+    align3 = AlignController()  # Independent PID history for marker 3.
     align = AlignController()  # mission45 專用，PID 與 controller 完全獨立
     target_id = TARGET_ID
     tracking = False
@@ -336,6 +374,7 @@ def main():
                 command = STOP
                 position = None
                 positions = {}  # {marker id: (x, y, z)}，mission45 用
+                normals = {}  # Unit marker-plane normals in camera coordinates.
                 if detector is not None:
                     corners, ids, _ = detector.detectMarkers(frame)
                 else:
@@ -362,6 +401,12 @@ def main():
                         cv2.drawFrameAxes(frame, intrinsic, distortion,
                                           rvecs[0], tvecs[0], MARKER_LENGTH / 2)
                         positions[int(marker_id)] = position
+                        if int(marker_id) in (3, ID_START, ID_END):
+                            rotation, _ = cv2.Rodrigues(rvecs[0])
+                            normal = rotation[:, 2]  # Marker-local Z in camera frame.
+                            if normal[2] < 0:
+                                normal = -normal
+                            normals[int(marker_id)] = tuple(float(v) for v in normal)
                         # break
                 # Only advance from Section 2 after a full second without ID 0.
                 if tracking and drone.is_flying and not manual_active and m45_state is None:
@@ -398,14 +443,15 @@ def main():
                         and m45_state is None and section == 3 and 3 in positions
                         and not stage4_start_flag):
                     stage3_hold = 0
+                    align3.reset()
 
                 if tracking and drone.is_flying and not manual_active and m45_state is not None:
                     # ================= mission45 狀態機 (只用 align 的獨立 PID) =================
                     command = STOP
                     if m45_state == ALIGN_4:
-                        # 對準 marker 4：左右置中 + 保持 M45_TARGET_DISTANCE
+                        # Align with marker 4's normal at the plane-distance target.
                         if ID_START in positions:
-                            command, ok = align.velocity(positions[ID_START])
+                            command, ok = align.velocity(positions[ID_START], normals[ID_START])
                             hold = hold + 1 if ok else 0   # 連續計數，一幀不合格就歸零
                             if hold >= ALIGN_HOLD_FRAMES:
                                 m45_state = STRAFE_LEFT
@@ -433,9 +479,9 @@ def main():
                             command = (-STRAFE_SPEED, 0, 0, 0)
 
                     elif m45_state == ALIGN_5:
-                        # 把 marker 5 置中 (x≈0) 並保持 M45_TARGET_DISTANCE
+                        # Align with marker 5's normal at the plane-distance target.
                         if ID_END in positions:
-                            command, ok = align.velocity(positions[ID_END])
+                            command, ok = align.velocity(positions[ID_END], normals[ID_END])
                             hold = hold + 1 if ok else 0
                             if hold >= ALIGN_HOLD_FRAMES:
                                 m45_state = BACK_OFF
@@ -449,13 +495,14 @@ def main():
                             hold = 0
 
                     elif m45_state == BACK_OFF:
-                        # 邊保持置中邊後退；Z 一進入 BACK_DISTANCE ± BACK_TOL 就立即降落
+                        # Back off along the normal; land at the plane-distance target.
                         land_now = False
                         if ID_END in positions:
-                            command, _ = align.velocity(positions[ID_END], target_z=BACK_DISTANCE)
-                            z5 = positions[ID_END][2]
-                            if abs(z5 - BACK_DISTANCE) <= BACK_TOL:
-                                print(f'Z={z5:.1f} 已進入 {BACK_DISTANCE:.0f}±{BACK_TOL:.0f} cm -> 立即降落')
+                            command, _ = align.velocity(positions[ID_END], normals[ID_END],
+                                                         target_distance=BACK_DISTANCE)
+                            distance5 = sum(p*n for p, n in zip(positions[ID_END], normals[ID_END]))
+                            if abs(distance5 - BACK_DISTANCE) <= BACK_TOL:
+                                print(f'Plane distance={distance5:.1f} cm -> land')
                                 land_now = True
                         else:
                             align.reset()
@@ -523,14 +570,9 @@ def main():
                     # SECTION 3: marker 3 after the marker-0 loss timeout.
                     elif section == 3 and 3 in positions and not stage4_start_flag:
                         print("id = 3")
-                        X = position[0]
-                        Y = position[1]
-                        Z = position[2]
-
-                        print(f"Z-TARGET_DISTANCE {Z-TARGET_DISTANCE_3}")
-                        command = controller.velocity_new(position=position, target_x=0, stage=3, target_y=0, target_z=TARGET_DISTANCE_3)
-                        aligned = (abs(X) <= DEADBAND and abs(Y) <= DEADBAND
-                                   and abs(Z - TARGET_DISTANCE_3) <= DEADBAND)
+                        command, aligned = align3.velocity(
+                            positions[3], normals[3],
+                            target_distance=TARGET_DISTANCE_3, target_y=0)
                         stage3_hold = stage3_hold + 1 if aligned else 0
                         if stage3_hold >= ALIGN_HOLD_FRAMES:
                             stage3_hold = 0
@@ -547,7 +589,7 @@ def main():
                         stage3_flag = False
                         print("drone.move_forward(300)")
                         drone.move_down(60)
-                        drone.move_forward(280)
+                        drone.move_forward(270)
                         drone.rotate_clockwise(90)
                         drone.move_back(80)
                         stage4_start_flag = True
@@ -597,6 +639,7 @@ def main():
             # Stop automatic movement if video has not updated for 0.3 seconds.
             if not manual_active and monotonic() - last_frame_time > 0.3:
                 stage3_hold = 0
+                align3.reset()
                 marker0_missing_since = None
                 command = STOP
                 controller.reset()
