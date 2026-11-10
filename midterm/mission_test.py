@@ -2,7 +2,8 @@
 
 Intended route: marker 1 -> pass right -> marker 2 -> pass left -> marker 3.
 Section 2 follows marker 0 until it is absent for one continuous second,
-then Section 3 tracks marker 3. Mission45 can only start after this transition.
+then Section 3 tracks marker 3. Mission45 is enabled only after the marker-3
+movement sequence completes, or by pressing 4 to skip ahead manually.
 
 Marker 1: if Z > 125 cm, center and approach; otherwise target X = -50 cm.
 Marker 2: if Z > 125 cm, center and approach; otherwise target X = +50 cm.
@@ -11,6 +12,7 @@ Marker 3: align position/yaw with its normal at a perpendicular distance of
 All velocity_new() branches still use a Z target of 120 cm.
 
 1: take off and track; 2: land; 3/Space: hover; T: resume; Q/Esc: exit.
+4: enable mission45 and track marker 4 (already airborne; waits if unseen).
 W/S: forward/back; A/D: left/right; Z/X: up/down; C/V: yaw.
 Movement keys override PID for 0.5 s after the last key event.
 Gains and limits below are starting values and require flight tuning.
@@ -265,6 +267,7 @@ def main():
     section = 1
     marker0_missing_since = None
     stage4_start_flag = False
+    mission45_enabled = False
     m45_state = None           # None = 還沒看到 marker 4，仍跑 stage13 原本邏輯
     hold = 0                   # mission45 已連續對準的幀數
     strafe_start = 0.0         # 開始向左平移的時間
@@ -328,6 +331,9 @@ def main():
                 tracking = True
                 command = STOP
                 m45_state, hold = None, 0   # 重新從 stage13 開頭開始
+                mission45_enabled = False
+                stage3_flag = False
+                stage4_start_flag = False
                 section = 1
                 marker0_missing_since = None
                 stage3_hold = 0
@@ -347,6 +353,16 @@ def main():
                 if drone.is_flying:
                     drone.send_rc_control(*STOP)
                 controller.reset()
+            elif key == ord('4'):
+                mission45_enabled = True
+                manual_until = 0.0
+                command = STOP
+                tracking = drone.is_flying
+                stage3_flag = False
+                stage4_start_flag = False
+                controller.reset()
+                align3.reset()
+                print('mission45 enabled manually: waiting for marker 4')
             elif key in (ord('t'), ord('T')):
                 manual_until = 0.0
                 command = STOP
@@ -409,7 +425,8 @@ def main():
                             normals[int(marker_id)] = tuple(float(v) for v in normal)
                         # break
                 # Only advance from Section 2 after a full second without ID 0.
-                if tracking and drone.is_flying and not manual_active and m45_state is None:
+                if (tracking and drone.is_flying and not manual_active
+                        and m45_state is None and not mission45_enabled):
                     marker0_visible = ids is not None and 0 in ids.flatten()
                     if marker0_visible and section != 2:
                         section = 2
@@ -433,14 +450,15 @@ def main():
                         position = positions.get(0 if section == 2 else 3)
                 # ---- 看到 marker 4：停止 stage13 流程，改由 mission45 接手 ----
                 if (tracking and drone.is_flying and not manual_active
-                        and section == 3 and m45_state is None and ID_START in positions):
+                        and mission45_enabled and m45_state is None and ID_START in positions):
                     m45_state, hold = ALIGN_4, 0
                     stage4_start_flag = False   # 不再繼續上升
                     align.reset()
                     print('看到 marker 4 -> 進入 mission45 流程')
 
                 if not (tracking and drone.is_flying and not manual_active
-                        and m45_state is None and section == 3 and 3 in positions
+                        and m45_state is None and not mission45_enabled
+                        and section == 3 and 3 in positions
                         and not stage4_start_flag):
                     stage3_hold = 0
                     align3.reset()
@@ -521,7 +539,9 @@ def main():
                     else:  # DONE：懸停。按 1 可從頭重新開始。
                         command = STOP
 
-                elif (tracking and drone.is_flying and position is not None and not manual_active) or stage4_start_flag:
+                elif (tracking and drone.is_flying and not manual_active
+                      and ((not mission45_enabled and position is not None)
+                           or stage4_start_flag)):
                     # SECTION 1, first obstacle: marker 1.
                     # The test is one-sided Z error, not full X/Y/Z alignment.
                     if section == 1 and ids is not None and int(ids[0, 0]) == 1:
@@ -592,6 +612,7 @@ def main():
                         drone.move_forward(270)
                         drone.rotate_clockwise(90)
                         drone.move_back(80)
+                        mission45_enabled = True  # All four blocking moves succeeded.
                         stage4_start_flag = True
                         stage4_dis = 50
 
@@ -610,9 +631,12 @@ def main():
                           'TRACKING' if tracking and drone.is_flying else 'PAUSED')
                 lines = [f'{status} | ID: {target_id} | target Z: {TARGET_DISTANCE:.0f} cm',
                          '1: takeoff/track | 2: land | 3/Space: hover | T: track | Q: quit',
+                         '4: enable mission45 / wait for marker 4',
                          'Manual priority: W/S A/D Z/X C/V (0.5 s timeout)']
                 if m45_state is not None:
                     lines.append(f'mission45: {m45_state} | hold: {hold}/{ALIGN_HOLD_FRAMES}')
+                elif mission45_enabled:
+                    lines.append('mission45 enabled: waiting for marker 4')
                 elif section == 3:
                     lines.append(f'Marker 3 alignment: {stage3_hold}/{ALIGN_HOLD_FRAMES}')
                 if position is None:
